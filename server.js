@@ -46,11 +46,11 @@ app.post('/mappings', async (req, res) => {
 });
 
 // Get User (No Caching, No Indexing)
-app.get('/users/:email', async (req, res) => {
+app.get('/mappings/:nino', async (req, res) => {
   try {
-    const user = await db.collection('users').findOne({ email: req.params.email });
-    if (!user) return res.status(404).json({ message: 'User not found' });
-    res.json(user);
+    const mapping = await db.collection('mappings').findOne({ NINO: req.params.nino });
+    if (!mapping) return res.status(404).json({ message: 'Mapping not found' });
+    res.json(mapping);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
