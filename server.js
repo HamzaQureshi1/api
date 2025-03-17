@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const { MongoClient } = require('mongodb');
+const { z } = require('zod');
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -34,13 +35,21 @@ client.connect()
   })
   .catch((err) => console.error('MongoDB Connection Error:', err));
 
+  const mappingSchema = z.object({
+    NINO: z.string().min(5).max(10),
+    GUID: z.string().uuid()
+  });  
+
 // Create User (No Validation, No Indexing, No Caching)
 app.post('/mappings', async (req, res) => {
   try {
-    const mapping = req.body;
+    const mapping = mappingSchema.parse(req.body);
     const result = await db.collection('mappings').insertOne(mapping);
     res.status(201).json(result);
   } catch (error) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ error: error.errors });
+    }
     res.status(400).json({ error: error.message });
   }
 });
