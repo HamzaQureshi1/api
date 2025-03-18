@@ -30,12 +30,17 @@ const client = new MongoClient(process.env.MONGO_URI, {
 
 let db;
 client.connect()
-  .then(() => {
+  .then(async () => {
     db = client.db('dummyDB');
-    console.log('Connected to MongoDB');
+    console.log('✅ Connected to MongoDB');
+
+    // Ensure index exists on the NINO field
+    await db.collection('mappings').createIndex({ NINO: 1 }, { unique: true });
+    console.log('✅ Index created on NINO field');
+
   })
-  .catch((err) => console.error('MongoDB Connection Error:', err));
-  
+  .catch((err) => console.error('❌ MongoDB Connection Error:', err));
+
 const redisClient = createClient({
      url: 'redis://127.0.0.1:6379'
 });
@@ -50,15 +55,27 @@ const mappingSchema = z.object({
 });  
 
 // Create Mapping (Store in MongoDB and Redis Cache)
+// Create Mapping (With Idempotency Check)
 app.post('/mappings', async (req, res) => {
   try {
     const mapping = mappingSchema.parse(req.body);
+    const { GUID, NINO } = mapping;
+
+    // Check if GUID already exists in Redis (idempotency check)
+    const existingMapping = await redisClient.get(GUID);
+    if (existingMapping) {
+      console.log('Duplicate request detected! Returning cached response.');
+      return res.status(200).json(JSON.parse(existingMapping));
+    }
+
+    // Insert into MongoDB
     const result = await db.collection('mappings').insertOne(mapping);
-    
-    // Store mapping in Redis cache with expiry of 10 minutes
-    await redisClient.set(mapping.NINO, JSON.stringify(mapping), { EX: 20 });
+
+    // Store mapping in Redis with expiry (for idempotency)
+    await redisClient.set(GUID, JSON.stringify(mapping), { EX: 600 });
+    await redisClient.set(NINO, JSON.stringify(mapping), { EX: 600 });
+
     console.log('Mapping stored in Redis cache.');
-    
     res.status(201).json(result);
   } catch (error) {
     if (error instanceof z.ZodError) {
