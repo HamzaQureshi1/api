@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const { MongoClient } = require('mongodb');
 const { z } = require('zod');
+const { createClient } = require('redis');
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -34,17 +35,30 @@ client.connect()
     console.log('Connected to MongoDB');
   })
   .catch((err) => console.error('MongoDB Connection Error:', err));
+  
+const redisClient = createClient({
+     url: 'redis://127.0.0.1:6379'
+});
 
-  const mappingSchema = z.object({
-    NINO: z.string().min(5).max(10),
-    GUID: z.string().uuid()
-  });  
+redisClient.connect()
+  .then(() => console.log('Connected to Redis'))
+  .catch((err) => console.error('Redis Connection Error:', err));
 
-// Create User (No Validation, No Indexing, No Caching)
+const mappingSchema = z.object({
+  NINO: z.string().min(5).max(10),
+  GUID: z.string().uuid()
+});  
+
+// Create Mapping (Store in MongoDB and Redis Cache)
 app.post('/mappings', async (req, res) => {
   try {
     const mapping = mappingSchema.parse(req.body);
     const result = await db.collection('mappings').insertOne(mapping);
+    
+    // Store mapping in Redis cache with expiry of 10 minutes
+    await redisClient.set(mapping.NINO, JSON.stringify(mapping), { EX: 20 });
+    console.log('Mapping stored in Redis cache.');
+    
     res.status(201).json(result);
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -54,11 +68,22 @@ app.post('/mappings', async (req, res) => {
   }
 });
 
-// Get User (No Caching, No Indexing)
+// Get Mapping (Fetch from Redis or MongoDB)
 app.get('/mappings/:nino', async (req, res) => {
   try {
-    const mapping = await db.collection('mappings').findOne({ NINO: req.params.nino });
+    const nino = req.params.nino;
+
+    // Check Redis cache first
+    const cachedMapping = await redisClient.get(nino);
+    if (cachedMapping) {
+      console.log('Cache hit! Returning data from Redis.');
+      return res.json(JSON.parse(cachedMapping));
+    }
+
+    // If not found in cache, fetch from MongoDB
+    const mapping = await db.collection('mappings').findOne({ NINO: nino });
     if (!mapping) return res.status(404).json({ message: 'Mapping not found' });
+
     res.json(mapping);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -68,4 +93,3 @@ app.get('/mappings/:nino', async (req, res) => {
 app.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
-
