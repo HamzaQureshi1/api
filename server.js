@@ -46,8 +46,8 @@ const redisClient = createClient({
 });
 
 redisClient.connect()
-  .then(() => console.log('Connected to Redis'))
-  .catch((err) => console.error('Redis Connection Error:', err));
+  .then(() => console.log('✅ Connected to Redis'))
+  .catch((err) => console.error('❌ Redis Connection Error:', err));
 
 const mappingSchema = z.object({
   NINO: z.string().min(5).max(10),
@@ -55,7 +55,6 @@ const mappingSchema = z.object({
 });  
 
 // Create Mapping (Store in MongoDB and Redis Cache)
-// Create Mapping (With Idempotency Check)
 app.post('/mappings', async (req, res) => {
   try {
     const mapping = mappingSchema.parse(req.body);
@@ -64,18 +63,18 @@ app.post('/mappings', async (req, res) => {
     // Check if GUID already exists in Redis (idempotency check)
     const existingMapping = await redisClient.get(GUID);
     if (existingMapping) {
-      console.log('Duplicate request detected! Returning cached response.');
+      console.log('⚠️ Duplicate request detected! Returning cached response.');
       return res.status(200).json(JSON.parse(existingMapping));
     }
 
     // Insert into MongoDB
     const result = await db.collection('mappings').insertOne(mapping);
 
-    // Store mapping in Redis with expiry (for idempotency)
-    await redisClient.set(GUID, JSON.stringify(mapping), { EX: 600 });
-    await redisClient.set(NINO, JSON.stringify(mapping), { EX: 600 });
+    // Store mapping in Redis with expiry (for idempotency and fast retrieval)
+    await redisClient.set(GUID, JSON.stringify(mapping), { EX: 60 }); // Cache for 60 sec
+    await redisClient.set(NINO, JSON.stringify(mapping), { EX: 60 });
 
-    console.log('Mapping stored in Redis cache.');
+    console.log('✅ Mapping stored in Redis cache.');
     res.status(201).json(result);
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -90,16 +89,20 @@ app.get('/mappings/:nino', async (req, res) => {
   try {
     const nino = req.params.nino;
 
-    // Check Redis cache first
+    // Step 1: Check Redis cache first
     const cachedMapping = await redisClient.get(nino);
     if (cachedMapping) {
-      console.log('Cache hit! Returning data from Redis.');
+      console.log('✅ Cache hit! Returning data from Redis.');
       return res.json(JSON.parse(cachedMapping));
     }
 
-    // If not found in cache, fetch from MongoDB
+    // Step 2: If not found in cache, fetch from MongoDB
     const mapping = await db.collection('mappings').findOne({ NINO: nino });
     if (!mapping) return res.status(404).json({ message: 'Mapping not found' });
+
+    // Step 3: Store result in Redis for future requests (set expiry time)
+    await redisClient.set(nino, JSON.stringify(mapping), { EX: 60 });
+    console.log('✅ MongoDB hit! Storing data in Redis cache for future requests.');
 
     res.json(mapping);
   } catch (error) {
@@ -108,5 +111,5 @@ app.get('/mappings/:nino', async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+  console.log(`🚀 Server running on port ${port}`);
 });
